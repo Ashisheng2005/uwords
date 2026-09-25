@@ -28,6 +28,12 @@ public sealed record TranslationSettings
         """;
     public string MultiParagraphPrompt { get; set; } = "Translate to {{to}}:\n\n{{text}}";
     public string SingleParagraphPrompt { get; set; } = "Translate to {{to}} (output translation only):\n\n{{text}}";
+    public string ExamplePrompt { get; set; } = """
+        Translate {{text}} into {{to}}. Return only a compact JSON object:
+        {"translation":"translated text","exampleSource":"one natural short sentence in the source language using the selected expression","exampleTranslation":"that sentence translated into {{to}}"}
+        For a full sentence, create a different short sentence illustrating its key expression.
+        Do not repeat the translation in the example or add notes, definitions, or parts of speech.
+        """;
 
     [JsonIgnore]
     public string ApiKey { get; set; } = "";
@@ -59,6 +65,7 @@ public sealed record TranslationSettings
             throw new ArgumentException("{{text}} 仅可用于单段和多段提示词。");
         ValidatePrompt(MultiParagraphPrompt, true);
         ValidatePrompt(SingleParagraphPrompt, true);
+        ValidatePrompt(ExamplePrompt, true);
     }
 
     private static void ValidatePrompt(string prompt, bool requireText)

@@ -2,12 +2,17 @@ using Uword.App.Input;
 using Uword.App.Selection;
 using Uword.App.Workflow;
 using Uword.App.Translation;
+using Uword.App.Overlay;
 using System.Net;
 using System.Net.Http;
 using System.Text.Json;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Interop;
+using System.Windows.Input;
+using System.Windows.Media;
+using System.Windows.Media.Imaging;
+using System.Speech.Synthesis;
 using System.Windows.Threading;
 
 var tests = new (string Name, Action Run)[]
@@ -154,6 +159,28 @@ var tests = new (string Name, Action Run)[]
         var combined = TranslationPlan.Create("abc\n\ndef", 12, 4);
         Equal(1, combined.Batches.Count);
         Equal(12, string.Join("\n\n%%\n\n", combined.Batches[0].Pieces.Select(p => p.Text)).Length);
+    }),
+    ("short result JSON has translation and one bilingual example", () =>
+    {
+        const string json = """
+            {"translation":"存储库","exampleSource":"A code repository.",
+             "exampleTranslation":"代码存储库。"}
+            """;
+        Equal(true, TranslationResult.TryParse("```json\n" + json + "\n```", out var result));
+        Equal("存储库", result?.Translation);
+        Equal("代码存储库。", result?.ExampleTranslation);
+        Equal(false, TranslationResult.TryParse("{bad json", out _));
+        Equal(false, TranslationResult.TryParse("{\"exampleSource\":\"A\"}", out _));
+        Equal(true, TranslationResult.TryParse("{\"translation\":\"好\",\"exampleSource\":\"A\"}", out result));
+        Equal(null, result?.ExampleSource);
+    }),
+    ("example prompt is validated and old settings load", () =>
+    {
+        var settings = new TranslationSettings { Model = "mock", ApiKey = "secret" };
+        settings.Validate();
+        Throws<ArgumentException>(() => (settings with { ExamplePrompt = "no text" }).Validate());
+        var old = JsonSerializer.Deserialize<TranslationSettings>("{\"DictionaryPrompt\":\"old prompt\"}");
+        Equal(true, old!.ExamplePrompt.Contains("{{text}}"));
     })
 };
 
@@ -179,6 +206,34 @@ if (args.Contains("--configured-api"))
         Console.Error.WriteLine($"FAIL configured API: {ex.GetType().Name}: " +
             (ex is TranslationRequestException or ArgumentException ? ex.Message : "connection or response error"));
     }
+}
+if (args.Contains("--configured-example"))
+{
+    try
+    {
+        var settings = new SettingsStore().Load();
+        using var client = new TranslationClient();
+        var result = await client.TranslateResultAsync("repository", settings, CancellationToken.None);
+        Console.WriteLine($"PASS configured example: translation={result.Translation.Length} chars, " +
+            $"example={result.ExampleSource is not null && result.ExampleTranslation is not null}");
+    }
+    catch (Exception ex)
+    {
+        failures++;
+        Console.Error.WriteLine($"FAIL configured example: {ex.GetType().Name}: " +
+            (ex is TranslationRequestException or ArgumentException ? ex.Message : "connection or response error"));
+    }
+}
+if (args.Contains("--voice-info"))
+{
+    try
+    {
+        using var speaker = new SpeechSynthesizer();
+        string voices = string.Join(", ", speaker.GetInstalledVoices()
+            .Where(v => v.Enabled).Select(v => v.VoiceInfo.Culture.Name));
+        Console.WriteLine($"Installed speech voice cultures: {voices}");
+    }
+    catch (Exception ex) { Console.WriteLine($"Speech voices unavailable: {ex.GetType().Name}"); }
 }
 var asyncTests = new (string Name, Func<Task> Run)[]
 {
@@ -261,6 +316,67 @@ var asyncTests = new (string Name, Func<Task> Run)[]
         var settings = new TranslationSettings { BaseUrl = "http://localhost:8000/v1", Model = "mock", ApiKey = "secret" };
         try { await client.TranslateAsync("hello", settings, cancel.Token); throw new Exception("Expected cancellation"); }
         catch (OperationCanceledException) { Equal(1, calls); }
+    }),
+    ("short selection makes one structured request", async () =>
+    {
+        int calls = 0;
+        using var http = new HttpClient(new StubHandler(async (request, token) =>
+        {
+            calls++;
+            using var body = JsonDocument.Parse(await request.Content!.ReadAsStringAsync(token));
+            Equal(true, body.RootElement.GetProperty("messages")[1].GetProperty("content")
+                .GetString()!.Contains("repository"));
+            return Reply("""
+                {"translation":"存储库","exampleSource":"A code repository.",
+                 "exampleTranslation":"代码存储库。"}
+                """);
+        }));
+        using var client = new TranslationClient(http);
+        var settings = new TranslationSettings { BaseUrl = "http://localhost:8000/v1", Model = "mock", ApiKey = "secret" };
+        var result = await client.TranslateResultAsync("repository", settings, CancellationToken.None);
+        Equal(1, calls);
+        Equal("存储库", result.Translation);
+        Equal("代码存储库。", result.ExampleTranslation);
+    }),
+    ("plain provider response uses one request without an example", async () =>
+    {
+        int calls = 0;
+        using var http = new HttpClient(new StubHandler((_, _) =>
+            Task.FromResult(Reply(++calls > 0 ? "存储库" : ""))));
+        using var client = new TranslationClient(http);
+        var settings = new TranslationSettings { BaseUrl = "http://localhost:8000/v1", Model = "mock", ApiKey = "secret" };
+        var result = await client.TranslateResultAsync("repository", settings, CancellationToken.None);
+        Equal(1, calls);
+        Equal("存储库", result.Translation);
+        Equal(null, result.ExampleSource);
+    }),
+    ("malformed structured response does not retry", async () =>
+    {
+        int calls = 0;
+        using var http = new HttpClient(new StubHandler((_, _) =>
+        {
+            calls++;
+            return Task.FromResult(Reply("{not json}"));
+        }));
+        using var client = new TranslationClient(http);
+        var settings = new TranslationSettings { BaseUrl = "http://localhost:8000/v1", Model = "mock", ApiKey = "secret" };
+        try { await client.TranslateResultAsync("repository", settings, CancellationToken.None); throw new Exception("Expected failure"); }
+        catch (FormatException) { Equal(1, calls); }
+    }),
+    ("long or multi-paragraph selection keeps plain translation", async () =>
+    {
+        int calls = 0;
+        using var http = new HttpClient(new StubHandler((_, _) =>
+        {
+            calls++;
+            return Task.FromResult(Reply("这是一个存储库。"));
+        }));
+        using var client = new TranslationClient(http);
+        var settings = new TranslationSettings { BaseUrl = "http://localhost:8000/v1", Model = "mock", ApiKey = "secret" };
+        var result = await client.TranslateResultAsync(new string('a', 161), settings, CancellationToken.None);
+        Equal(1, calls);
+        Equal("这是一个存储库。", result.Translation);
+        Equal(null, result.ExampleSource);
     })
 };
 foreach (var (name, run) in asyncTests)
@@ -279,6 +395,21 @@ if (args.Contains("--integration"))
         {
             monitor.Start();
             Console.WriteLine("PASS low-level mouse hook startup");
+        }
+        using (var speaker = new SpeechSynthesizer())
+        {
+            var voice = speaker.GetInstalledVoices().FirstOrDefault(v =>
+                v.Enabled && v.VoiceInfo.Culture.TwoLetterISOLanguageName == "en");
+            if (voice is null) Console.WriteLine("SKIP speech synthesis (no English voice installed)");
+            else
+            {
+                using var audio = new System.IO.MemoryStream();
+                speaker.SelectVoice(voice.VoiceInfo.Name);
+                speaker.SetOutputToWaveStream(audio);
+                speaker.Speak("repository");
+                Equal(true, audio.Length > 44);
+                Console.WriteLine("PASS offline speech synthesis to memory");
+            }
         }
     }
     catch (Exception ex)
@@ -355,8 +486,48 @@ static async Task<bool> RunUiaIntegrationAsync(string[] args)
                     settingsWindow.Show();
                     Equal(true, settingsWindow.ActualWidth >= 540);
                     Equal(true, settingsWindow.FindName("SaveButton") is Button);
+                    Equal(true, settingsWindow.FindName("ExampleBox") is TextBox);
+                    if (args.Contains("--ui-screenshot"))
+                        SaveScreenshot(settingsWindow, System.IO.Path.Combine(System.IO.Path.GetTempPath(), "Uword-settings.png"));
                     settingsWindow.Hide();
                     Console.WriteLine("PASS translation settings window startup");
+                }
+                var circle = new CircleWindow();
+                bool clicked = false;
+                circle.Clicked += () => clicked = true;
+                circle.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, 0, MouseButton.Left)
+                { RoutedEvent = UIElement.MouseLeftButtonUpEvent });
+                Equal(true, clicked);
+                circle.Close();
+                var preview = new PreviewWindow();
+                preview.SetContent("repository", "source");
+                Equal(Visibility.Visible, ((Button)preview.FindName("SpeakButton")).Visibility);
+                preview.SetResult(new TranslationResult("存储库", "This is a public code repository.",
+                    "这是一个公共代码存储库。"));
+                Equal("存储库", ((TextBlock)preview.FindName("ResultText")).Text);
+                Equal(Visibility.Visible, ((StackPanel)preview.FindName("ExamplePanel")).Visibility);
+                if (args.Contains("--ui-screenshot"))
+                {
+                    preview.Show();
+                    SaveScreenshot(preview, System.IO.Path.Combine(System.IO.Path.GetTempPath(), "Uword-preview.png"));
+                }
+                preview.SetResult(new TranslationResult("普通译文"));
+                Equal(Visibility.Collapsed, ((StackPanel)preview.FindName("ExamplePanel")).Visibility);
+                preview.SetLoading();
+                Equal("正在翻译...", ((TextBlock)preview.FindName("ResultText")).Text);
+                preview.Close();
+                Console.WriteLine("PASS marker click and unified preview controls");
+                using (var overlay = new OverlayController())
+                {
+                    var snapshot = new SelectionSnapshot("repository", Environment.ProcessId,
+                        new WindowInteropHelper(window).Handle, candidate.Position, null, SelectionGesture.Drag);
+                    var markerPoint = new ScreenPoint(candidate.Position.X + 15, candidate.Position.Y + 15);
+                    overlay.ShowCircle(snapshot);
+                    Equal(true, overlay.Contains(markerPoint));
+                    overlay.ShowPreview(snapshot);
+                    Equal(true, overlay.Contains(markerPoint));
+                    overlay.Hide();
+                    Console.WriteLine("PASS marker click remains inside overlay during preview transition");
                 }
                 completion.TrySetResult(foregroundUnavailable ? "ForegroundUnavailable" :
                     result.Snapshot?.Text ?? result.Failure.ToString());
@@ -374,6 +545,20 @@ static async Task<bool> RunUiaIntegrationAsync(string[] args)
     if (text == "ForegroundUnavailable") return false;
     Equal("Uword", text);
     return true;
+}
+
+static void SaveScreenshot(Window window, string path)
+{
+    window.UpdateLayout();
+    var visual = (Visual)window.Content;
+    var image = new RenderTargetBitmap((int)window.ActualWidth, (int)window.ActualHeight,
+        96, 96, PixelFormats.Pbgra32);
+    image.Render(visual);
+    var encoder = new PngBitmapEncoder();
+    encoder.Frames.Add(BitmapFrame.Create(image));
+    using var stream = System.IO.File.Create(path);
+    encoder.Save(stream);
+    Console.WriteLine($"UI screenshot: {path}");
 }
 
 sealed class StubHandler(Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> handler) : HttpMessageHandler

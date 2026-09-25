@@ -6,11 +6,14 @@ namespace Uword.App.Overlay;
 
 public partial class CircleWindow : Window
 {
+    public event Action? Clicked;
+
     public CircleWindow()
     {
         InitializeComponent();
-        ToolTip = "Preview selected text";
+        ToolTip = "单击立即翻译，或悬停一秒";
         System.Windows.Controls.ToolTipService.SetInitialShowDelay(this, 1500);
+        MouseLeftButtonUp += (_, _) => Clicked?.Invoke();
     }
 
     protected override void OnSourceInitialized(EventArgs e)

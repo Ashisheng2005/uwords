@@ -1,6 +1,6 @@
 # Uword
 
-Windows selection translator. A selection marker appears after selecting text; hover over it for one second to translate with a user-configured OpenAI-compatible chat completions endpoint.
+Windows selection translator. A selection marker appears after selecting text; click it for an immediate preview, or hover for one second. Translation uses a user-configured OpenAI-compatible chat completions endpoint.
 
 ## Structure
 
@@ -8,7 +8,8 @@ Windows selection translator. A selection marker appears after selecting text; h
 - `src/Uword.App/Selection`: isolated UI Automation query process and selection data contract.
 - `src/Uword.App/Workflow`: current-selection state, timeout, hover timer, and request cancellation.
 - `src/Uword.App/Translation`: settings, DPAPI-encrypted API key, prompt templates, paragraph batching, HTTP client, rate limiting.
-- `src/Uword.App/Overlay`: non-activating marker and translation/original-text preview.
+- `src/Uword.App/Audio`: on-demand pronunciation with installed Windows voices.
+- `src/Uword.App/Overlay`: non-activating marker and unified translation preview.
 - `src/Uword.App/Diagnostics`: tray-accessible status window.
 - `src/Uword.App/Interop`: Win32 declarations.
 - `tests/Uword.Tests`: deterministic gesture and bounds checks.
@@ -34,11 +35,13 @@ Run `artifacts/win-x64/Uword.App.exe`. Keep `THIRD_PARTY_NOTICES.md` with redist
 
 The app starts in the notification area. Right-click its tray icon and open **翻译设置**. Fill in Base URL (for example `https://api.openai.com/v1`), API Key, model, and target language. Adjust temperature (default 0), prompts, requests per second (default 2), maximum text length (default 1200 characters), and maximum paragraphs (default 4). Click **测试连接** to make a sample API call, then **保存设置**. A full `/chat/completions` URL also works. HTTPS is required except for loopback HTTP endpoints.
 
-Double-click the tray icon for status; right-click to pause selection or exit. Drag-select or double-click a word in another application. If UI Automation exposes selected text, a green marker appears near the selection. Hover over it for one second to send the selected text to the configured endpoint. The preview shows the translation and the original text. Click outside or close the preview to cancel the current translation and dismiss it.
+Double-click the tray icon for status; right-click to pause selection or exit. Drag-select or double-click a word in another application. If UI Automation exposes selected text, a green marker appears near the selection. Click it to open the preview immediately or hover for one second. The request starts after the preview appears. The preview always shows the original text followed by the translation, and for short single-line selections (up to 160 characters) one illustrative bilingual sentence. Longer and multi-paragraph selections show a translation without an example. Click the speaker icon to hear the selection with an installed Windows voice. No speech request is sent to the API, and playback never starts automatically. Unavailable voices are reported in the preview. Click outside or close the preview to cancel the current request and dismiss it.
 
 The client sends a non-streaming `POST /chat/completions` with system and user messages. Prompt variables `{{to}}` and `{{text}}` are supported; optional placeholders from the reference prompt are deliberately not implemented. Multi-paragraph batches use a standalone `%%` separator and are validated against the source paragraph count. A malformed multi-paragraph response falls back to individual requests. Oversized paragraphs are split at a nearby sentence/word boundary when possible; translated fragments are joined with a space. Each request respects the configured source length and paragraph count, and the global rate limit also applies to retries and connection tests. HTTP 429 and 5xx failures are retried at most twice; an unsupported temperature is reported as an API error, not silently removed.
 
-Settings are stored under `%LOCALAPPDATA%\Uword`. The API Key is stored separately using Windows DPAPI for the current user. Text and responses are not written to diagnostics. Text leaves the machine only on marker hover or an explicit connection test; the connection test sends a short fixed sample. The clipboard is never changed.
+Short selections use one model request for a compact JSON object with `translation`, `exampleSource`, and `exampleTranslation`; its prompt is editable in settings. It does not require optional `response_format` support from the compatible provider. A plain text answer is shown as the translation without another request; malformed JSON reports a format error without retrying. Existing settings files load with the new default example prompt, while their old dictionary prompt is ignored. The speaker uses `System.Speech` and requires a matching installed English or Chinese voice.
+
+Settings are stored under `%LOCALAPPDATA%\Uword`. The API Key is stored separately using Windows DPAPI for the current user. Text and responses are not written to diagnostics. Text leaves the machine only on marker click/hover or an explicit connection test; the connection test sends a short fixed sample. The clipboard is never changed.
 
 The initial implementation detects mouse selections only. Each candidate launches a short-lived copy of Uword to query UI Automation; a crashing or blocked accessibility provider cannot terminate the tray process. Applications without a UI Automation text selection do not show a marker. Elevated applications, secure desktops, and some custom-rendered editors are not guaranteed to work. A slow provider may time out; no clipboard fallback is enabled. Use the status window to distinguish an empty selection from an unsupported text pattern or timeout.
 

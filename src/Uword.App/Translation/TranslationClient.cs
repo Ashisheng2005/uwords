@@ -50,6 +50,29 @@ public sealed class TranslationClient : IDisposable
         return plan.Assemble(results);
     }
 
+    public async Task<TranslationResult> TranslateResultAsync(string text,
+        TranslationSettings settings, CancellationToken token)
+    {
+        // A short selection gets an example in the same request. Larger selections
+        // retain paragraph-preserving translation without generated prose.
+        if (text.Trim().Length > Math.Min(160, settings.MaxTextLength) ||
+            text.Contains('\n') || text.Contains('\r'))
+            return new TranslationResult(await TranslateAsync(text, settings, token));
+
+        settings.Validate();
+        const string system = "You are a professional translator. Reply with one valid JSON object only, " +
+            "with keys translation, exampleSource, exampleTranslation. No markdown or explanations.";
+        string content = await CompleteAsync(text.Trim(), false, settings, token,
+            settings.ExamplePrompt, system);
+        if (TranslationResult.TryParse(content, out var result)) return result!;
+
+        // Compatible providers may ignore the JSON instruction. Keep a plain answer
+        // without introducing a second request and its latency.
+        if (!content.TrimStart().StartsWith('{') && !content.TrimStart().StartsWith("```", StringComparison.Ordinal))
+            return new TranslationResult(content.Trim());
+        throw new FormatException("模型返回的译文格式不正确，请调整翻译与例句提示词。");
+    }
+
     public Task<string> TestAsync(TranslationSettings settings, CancellationToken token)
     {
         settings.Validate();
@@ -57,7 +80,8 @@ public sealed class TranslationClient : IDisposable
         return CompleteAsync(sample[..Math.Min(sample.Length, settings.MaxTextLength)], false, settings, token);
     }
 
-    private async Task<string> CompleteAsync(string text, bool multi, TranslationSettings settings, CancellationToken token)
+    private async Task<string> CompleteAsync(string text, bool multi, TranslationSettings settings, CancellationToken token,
+        string? userTemplate = null, string? systemTemplate = null)
     {
         var payload = JsonSerializer.Serialize(new
         {
@@ -66,9 +90,9 @@ public sealed class TranslationClient : IDisposable
             stream = false,
             messages = new[]
             {
-                new { role = "system", content = TranslationSettings.Render(settings.SystemPrompt, settings.TargetLanguage, "") },
+                new { role = "system", content = TranslationSettings.Render(systemTemplate ?? settings.SystemPrompt, settings.TargetLanguage, "") },
                 new { role = "user", content = TranslationSettings.Render(
-                    multi ? settings.MultiParagraphPrompt : settings.SingleParagraphPrompt, settings.TargetLanguage, text) }
+                    userTemplate ?? (multi ? settings.MultiParagraphPrompt : settings.SingleParagraphPrompt), settings.TargetLanguage, text) }
             }
         });
 

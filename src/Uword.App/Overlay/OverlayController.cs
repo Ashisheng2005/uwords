@@ -5,6 +5,7 @@ using System.Windows.Interop;
 using Uword.App.Input;
 using Uword.App.Interop;
 using Uword.App.Selection;
+using Uword.App.Translation;
 
 namespace Uword.App.Overlay;
 
@@ -13,21 +14,29 @@ public sealed class OverlayController : IDisposable
     private readonly CircleWindow _circle = new();
     private readonly PreviewWindow _preview = new();
     private ScreenPoint _anchor;
+    private NativeMethods.Rect? _recentMarker;
+    private long _recentMarkerUntil;
 
     public event Action? HoverEntered;
     public event Action? HoverLeft;
+    public event Action? MarkerClicked;
     public event Action? PreviewDismissed;
+    public event Action? SpeakRequested;
 
     public OverlayController()
     {
+        _ = new WindowInteropHelper(_preview).EnsureHandle();
         _circle.MouseEnter += (_, _) => HoverEntered?.Invoke();
         _circle.MouseLeave += (_, _) => HoverLeft?.Invoke();
+        _circle.Clicked += () => MarkerClicked?.Invoke();
         _preview.Dismissed += () => PreviewDismissed?.Invoke();
+        _preview.SpeakRequested += () => SpeakRequested?.Invoke();
     }
 
     public void ShowCircle(SelectionSnapshot snapshot)
     {
         _preview.Hide();
+        _recentMarker = null;
         var point = snapshot.MousePosition;
         if (snapshot.Bounds is { IsUsable: true } bounds)
         {
@@ -44,21 +53,31 @@ public sealed class OverlayController : IDisposable
 
     public void ShowPreview(SelectionSnapshot snapshot)
     {
+        nint marker = new WindowInteropHelper(_circle).Handle;
+        if (NativeMethods.GetWindowRect(marker, out var rect))
+        {
+            _recentMarker = rect;
+            _recentMarkerUntil = Stopwatch.GetTimestamp() + Stopwatch.Frequency / 2;
+        }
         _circle.Hide();
         string source;
         try { source = Process.GetProcessById(snapshot.ProcessId).ProcessName; }
         catch (Exception) { source = $"Process {snapshot.ProcessId}"; }
-        _preview.SetContent(snapshot.Text, $"{source} | {snapshot.Text.Length} characters");
+        _preview.SetContent(snapshot.Text, source);
         _preview.Show();
         Place(_preview, new ScreenPoint(_anchor.X + 32, _anchor.Y));
     }
 
-    public void SetTranslation(string text) => _preview.SetTranslation(text);
+    public void SetResult(TranslationResult result) => _preview.SetResult(result);
+    public void SetError(string message) => _preview.SetError(message);
+    public void SetVoiceStatus(string message) => _preview.SetVoiceStatus(message);
 
-    public bool Contains(ScreenPoint point) => Contains(_circle, point) || Contains(_preview, point);
+    public bool Contains(ScreenPoint point) => Contains(_circle, point) || Contains(_preview, point) ||
+        (_recentMarker is { } rect && Stopwatch.GetTimestamp() <= _recentMarkerUntil && Inside(rect, point));
 
     public void Hide()
     {
+        _recentMarker = null;
         _circle.Hide();
         _preview.Hide();
     }
@@ -67,10 +86,12 @@ public sealed class OverlayController : IDisposable
     {
         if (!window.IsVisible) return false;
         nint hwnd = new WindowInteropHelper(window).Handle;
-        return NativeMethods.GetWindowRect(hwnd, out var rect) &&
-            point.X >= rect.Left && point.X < rect.Right &&
-            point.Y >= rect.Top && point.Y < rect.Bottom;
+        return NativeMethods.GetWindowRect(hwnd, out var rect) && Inside(rect, point);
     }
+
+    private static bool Inside(NativeMethods.Rect rect, ScreenPoint point) =>
+        point.X >= rect.Left && point.X < rect.Right &&
+        point.Y >= rect.Top && point.Y < rect.Bottom;
 
     private static void Place(Window window, ScreenPoint point)
     {
