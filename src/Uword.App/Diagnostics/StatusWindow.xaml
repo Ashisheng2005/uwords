@@ -1,0 +1,30 @@
+<Window x:Class="Uword.App.Diagnostics.StatusWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Uword | 状态" Width="480" Height="320"
+        MinWidth="400" MinHeight="250" Background="#F6F8F7"
+        WindowStartupLocation="CenterScreen" ShowInTaskbar="True">
+    <Grid Margin="24">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+        <TextBlock Text="Uword" FontSize="22" FontWeight="SemiBold" Foreground="#172B27" />
+        <TextBlock Grid.Row="1" Margin="0,8,0,20" Text="划词翻译状态"
+                   Foreground="#52625D" FontSize="13" />
+        <Border Grid.Row="2" BorderBrush="#D5DFDB" BorderThickness="1" Background="White" Padding="14">
+            <StackPanel>
+                <TextBlock Text="CURRENT STATUS" FontWeight="SemiBold" FontSize="11" Foreground="#52625D" />
+                <TextBlock x:Name="StatusText" Margin="0,8,0,0" TextWrapping="Wrap"
+                           Text="Starting..." Foreground="#172B27" FontSize="14" />
+            </StackPanel>
+        </Border>
+        <Button x:Name="OpenLogButton" Grid.Row="3" Margin="0,16,0,0" Padding="12,6"
+                HorizontalAlignment="Left" Content="Open diagnostics log" />
+        <TextBlock Grid.Row="4" Margin="0,14,0,0" TextWrapping="Wrap" Foreground="#52625D"
+                   Text="选中的文字在悬停触发后会发送到配置的翻译接口；不使用剪贴板，也不在日志中记录原文或译文。关闭此窗口后程序仍在托盘运行。" />
+    </Grid>
+</Window>
