@@ -3,7 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="Uword | 翻译设置" Width="660" Height="760" MinWidth="540" MinHeight="540"
         WindowStartupLocation="CenterScreen" Background="#F6F8F7" ShowInTaskbar="True">
-    <DockPanel>
+    <DockPanel Background="#F6F8F7">
         <Border DockPanel.Dock="Bottom" BorderBrush="#D5DFDB" BorderThickness="0,1,0,0" Background="White" Padding="20,12">
             <DockPanel>
                 <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
@@ -43,7 +43,10 @@
                                                 AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" />
                 <TextBlock Text="单段提示词" /><TextBox x:Name="SingleBox" Margin="0,5,0,6" Padding="8" Height="85"
                                                 AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" />
-                <TextBlock Text="可用变量：{{to}}、{{text}}。多段译文须用独立一行的 %% 分隔。"
+                <TextBlock Text="单词释义提示词" Margin="0,12,0,0" />
+                <TextBox x:Name="DictionaryBox" Margin="0,5,0,6" Padding="8" Height="132"
+                         AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" />
+                <TextBlock Text="可用变量：{{to}}、{{text}}。多段译文须用独立一行的 %% 分隔；单词释义须返回 JSON。"
                            Foreground="#52625D" FontSize="12" />
             </StackPanel>
         </ScrollViewer>

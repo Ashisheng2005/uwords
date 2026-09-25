@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Net.Http;
 using System.Windows.Threading;
+using Uword.App.Audio;
 using Uword.App.Diagnostics;
 using Uword.App.Input;
 using Uword.App.Interop;
@@ -19,6 +20,7 @@ public sealed class SelectionCoordinator : IDisposable
     private readonly StatusWindow _diagnostics;
     private readonly DiagnosticLog _log;
     private readonly TranslationClient _translator;
+    private readonly PronunciationPlayer _audio = new();
     private TranslationSettings _settings;
     private readonly SelectionProbePolicy _policy = new();
     private readonly DispatcherTimer _hoverTimer;
@@ -28,6 +30,9 @@ public sealed class SelectionCoordinator : IDisposable
     private SelectionSnapshot? _current;
     private int _generation;
     private int _sourceChangeTicks;
+    private int _requestVersion;
+    private bool _triggered;
+    private TranslationMode _mode;
     private bool _enabled = true;
 
     public SelectionCoordinator(Dispatcher dispatcher, MouseMonitor mouse, SelectionClient reader,
@@ -49,6 +54,9 @@ public sealed class SelectionCoordinator : IDisposable
         _mouse.SelectionCandidateDetected += OnCandidate;
         _overlay.HoverEntered += OnHoverEntered;
         _overlay.HoverLeft += OnHoverLeft;
+        _overlay.MarkerClicked += OnMarkerClicked;
+        _overlay.ModeChanged += OnModeChanged;
+        _overlay.SpeakRequested += OnSpeakRequested;
         _overlay.PreviewDismissed += Reset;
         _hoverTimer.Tick += OnHoverElapsed;
         _sourceTimer.Tick += OnSourceTick;
@@ -144,7 +152,7 @@ public sealed class SelectionCoordinator : IDisposable
 
     private void OnHoverEntered()
     {
-        if (_current is null) return;
+        if (_current is null || _triggered) return;
         _hoverTimer.Start();
         _log.WriteEvent("marker_hover_started");
         _diagnostics.SetStatus("已进入标志，保持悬停一秒以翻译。");
@@ -156,48 +164,93 @@ public sealed class SelectionCoordinator : IDisposable
         _hoverTimer.Stop();
     }
 
-    private async void OnHoverElapsed(object? sender, EventArgs e)
+    private void OnHoverElapsed(object? sender, EventArgs e)
     {
         _hoverTimer.Stop();
+        Trigger("hover");
+    }
+
+    private void OnMarkerClicked() => Trigger("click");
+
+    private void Trigger(string source)
+    {
+        if (_current is null || _triggered) return;
+        _triggered = true;
+        _hoverTimer.Stop();
+        bool dictionaryEligible = WordCandidate.IsLikelyWord(_current.Text) &&
+            _current.Text.Trim().Length <= _settings.MaxTextLength;
+        _mode = dictionaryEligible ? TranslationMode.Dictionary : TranslationMode.Translation;
+        var elapsed = Stopwatch.StartNew();
+        _overlay.ShowPreview(_current, dictionaryEligible, _mode);
+        _log.WriteEvent($"preview_shown trigger={source} elapsed_ms={elapsed.ElapsedMilliseconds}");
+        _ = TranslateModeAsync(_mode);
+    }
+
+    private void OnModeChanged(TranslationMode mode)
+    {
+        if (!_triggered || _current is null || mode == _mode ||
+            (mode == TranslationMode.Dictionary && (!WordCandidate.IsLikelyWord(_current.Text) ||
+                _current.Text.Trim().Length > _settings.MaxTextLength))) return;
+        _mode = mode;
+        _overlay.SetMode(mode);
+        _overlay.SetLoading();
+        _audio.Stop();
+        _ = TranslateModeAsync(mode);
+    }
+
+    private void OnSpeakRequested()
+    {
+        if (!_triggered || _mode != TranslationMode.Dictionary || _current is null) return;
+        _overlay.SetVoiceStatus(_audio.TrySpeak(_current.Text.Trim(), out string error) ? "" : error);
+    }
+
+    private async Task TranslateModeAsync(TranslationMode mode)
+    {
         if (_current is null) return;
-        _log.WriteEvent("marker_hover_elapsed");
-        _overlay.ShowPreview(_current);
         int generation = _generation;
         var snapshot = _current;
         if (string.IsNullOrWhiteSpace(_settings.Model) || string.IsNullOrWhiteSpace(_settings.ApiKey))
         {
             _log.WriteEvent("translation_not_configured");
-            _overlay.SetTranslation("请在托盘菜单中配置翻译接口。");
+            _overlay.SetError("请在托盘菜单中配置翻译接口。");
             _diagnostics.SetStatus("请先打开翻译设置，填写模型和 API Key。");
             return;
         }
-        _translation = new CancellationTokenSource();
+        _translation?.Cancel();
+        var request = new CancellationTokenSource();
+        _translation = request;
+        int version = ++_requestVersion;
         _log.WriteEvent("translation_started");
         _diagnostics.SetStatus("正在请求翻译...");
         try
         {
-            string translated = await _translator.TranslateAsync(snapshot.Text, _settings, _translation.Token);
-            if (generation != _generation) return;
-            _overlay.SetTranslation(translated);
+            TranslationResult result = await _translator.TranslateRichAsync(snapshot.Text, mode, _settings, request.Token);
+            if (generation != _generation || version != _requestVersion) return;
+            _overlay.SetResult(result);
             _log.WriteEvent("translation_completed");
-            _diagnostics.SetStatus($"已翻译 {snapshot.Text.Length} 个字符。");
+            _diagnostics.SetStatus($"已处理 {snapshot.Text.Length} 个字符。");
         }
         catch (OperationCanceledException)
         {
-            if (generation != _generation || _translation?.IsCancellationRequested == true) return;
+            if (generation != _generation || version != _requestVersion || request.IsCancellationRequested) return;
             _log.WriteEvent("translation_timeout");
-            _overlay.SetTranslation("翻译请求超时。");
+            _overlay.SetError("翻译请求超时。");
             _diagnostics.SetStatus("翻译请求超时。");
         }
         catch (Exception ex) when (ex is ArgumentException or TranslationRequestException or
             HttpRequestException or FormatException or System.Text.Json.JsonException)
         {
-            if (generation != _generation) return;
+            if (generation != _generation || version != _requestVersion) return;
             _log.WriteEvent($"translation_failed_{ex.GetType().Name}");
             string message = ex is HttpRequestException ? "网络连接失败。" :
                 ex is System.Text.Json.JsonException ? "翻译服务响应格式错误。" : ex.Message;
-            _overlay.SetTranslation(message);
+            _overlay.SetError(message);
             _diagnostics.SetStatus($"翻译失败：{message}");
+        }
+        finally
+        {
+            if (ReferenceEquals(_translation, request)) _translation = null;
+            request.Dispose();
         }
     }
 
@@ -220,17 +273,19 @@ public sealed class SelectionCoordinator : IDisposable
     private void Reset()
     {
         ++_generation;
+        ++_requestVersion;
         if (_translation is not null) _log.WriteEvent("translation_session_ended");
         _probe?.Cancel();
         _probe?.Dispose();
         _probe = null;
         _translation?.Cancel();
-        _translation?.Dispose();
         _translation = null;
+        _audio.Stop();
         _hoverTimer.Stop();
         _sourceTimer.Stop();
         _current = null;
         _sourceChangeTicks = 0;
+        _triggered = false;
         _overlay.Hide();
     }
 
@@ -241,9 +296,13 @@ public sealed class SelectionCoordinator : IDisposable
         _mouse.SelectionCandidateDetected -= OnCandidate;
         _overlay.HoverEntered -= OnHoverEntered;
         _overlay.HoverLeft -= OnHoverLeft;
+        _overlay.MarkerClicked -= OnMarkerClicked;
+        _overlay.ModeChanged -= OnModeChanged;
+        _overlay.SpeakRequested -= OnSpeakRequested;
         _overlay.PreviewDismissed -= Reset;
         _hoverTimer.Tick -= OnHoverElapsed;
         _sourceTimer.Tick -= OnSourceTick;
         _overlay.Dispose();
+        _audio.Dispose();
     }
 }

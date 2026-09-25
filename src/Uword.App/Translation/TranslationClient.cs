@@ -50,6 +50,27 @@ public sealed class TranslationClient : IDisposable
         return plan.Assemble(results);
     }
 
+    public async Task<TranslationResult> TranslateRichAsync(string text, TranslationMode mode,
+        TranslationSettings settings, CancellationToken token)
+    {
+        if (mode != TranslationMode.Dictionary || !WordCandidate.IsLikelyWord(text) ||
+            text.Trim().Length > settings.MaxTextLength)
+            return TranslationResult.Plain(await TranslateAsync(text, settings, token));
+
+        settings.Validate();
+        const string system = "You are a bilingual dictionary editor. Reply with one valid JSON object only. " +
+            "Use null for an unknown IPA transcription; never fabricate citations or source context.";
+        string content = await CompleteAsync(text.Trim(), false, settings, token,
+            settings.DictionaryPrompt, system);
+        if (DictionaryEntry.TryParse(content, text, out var entry))
+            return TranslationResult.Lexical(entry!);
+
+        // A plain answer is usable immediately; malformed JSON needs a normal translation request.
+        if (!content.TrimStart().StartsWith('{') && !content.TrimStart().StartsWith("```", StringComparison.Ordinal))
+            return TranslationResult.Plain(content.Trim());
+        return TranslationResult.Plain(await TranslateAsync(text, settings, token));
+    }
+
     public Task<string> TestAsync(TranslationSettings settings, CancellationToken token)
     {
         settings.Validate();
@@ -57,7 +78,8 @@ public sealed class TranslationClient : IDisposable
         return CompleteAsync(sample[..Math.Min(sample.Length, settings.MaxTextLength)], false, settings, token);
     }
 
-    private async Task<string> CompleteAsync(string text, bool multi, TranslationSettings settings, CancellationToken token)
+    private async Task<string> CompleteAsync(string text, bool multi, TranslationSettings settings, CancellationToken token,
+        string? userTemplate = null, string? systemTemplate = null)
     {
         var payload = JsonSerializer.Serialize(new
         {
@@ -66,9 +88,9 @@ public sealed class TranslationClient : IDisposable
             stream = false,
             messages = new[]
             {
-                new { role = "system", content = TranslationSettings.Render(settings.SystemPrompt, settings.TargetLanguage, "") },
+                new { role = "system", content = TranslationSettings.Render(systemTemplate ?? settings.SystemPrompt, settings.TargetLanguage, "") },
                 new { role = "user", content = TranslationSettings.Render(
-                    multi ? settings.MultiParagraphPrompt : settings.SingleParagraphPrompt, settings.TargetLanguage, text) }
+                    userTemplate ?? (multi ? settings.MultiParagraphPrompt : settings.SingleParagraphPrompt), settings.TargetLanguage, text) }
             }
         });
 
