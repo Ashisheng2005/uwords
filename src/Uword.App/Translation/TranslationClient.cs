@@ -50,25 +50,27 @@ public sealed class TranslationClient : IDisposable
         return plan.Assemble(results);
     }
 
-    public async Task<TranslationResult> TranslateRichAsync(string text, TranslationMode mode,
+    public async Task<TranslationResult> TranslateResultAsync(string text,
         TranslationSettings settings, CancellationToken token)
     {
-        if (mode != TranslationMode.Dictionary || !WordCandidate.IsLikelyWord(text) ||
-            text.Trim().Length > settings.MaxTextLength)
-            return TranslationResult.Plain(await TranslateAsync(text, settings, token));
+        // A short selection gets an example in the same request. Larger selections
+        // retain paragraph-preserving translation without generated prose.
+        if (text.Trim().Length > Math.Min(160, settings.MaxTextLength) ||
+            text.Contains('\n') || text.Contains('\r'))
+            return new TranslationResult(await TranslateAsync(text, settings, token));
 
         settings.Validate();
-        const string system = "You are a bilingual dictionary editor. Reply with one valid JSON object only. " +
-            "Use null for an unknown IPA transcription; never fabricate citations or source context.";
+        const string system = "You are a professional translator. Reply with one valid JSON object only, " +
+            "with keys translation, exampleSource, exampleTranslation. No markdown or explanations.";
         string content = await CompleteAsync(text.Trim(), false, settings, token,
-            settings.DictionaryPrompt, system);
-        if (DictionaryEntry.TryParse(content, text, out var entry))
-            return TranslationResult.Lexical(entry!);
+            settings.ExamplePrompt, system);
+        if (TranslationResult.TryParse(content, out var result)) return result!;
 
-        // A plain answer is usable immediately; malformed JSON needs a normal translation request.
+        // Compatible providers may ignore the JSON instruction. Keep a plain answer
+        // without introducing a second request and its latency.
         if (!content.TrimStart().StartsWith('{') && !content.TrimStart().StartsWith("```", StringComparison.Ordinal))
-            return TranslationResult.Plain(content.Trim());
-        return TranslationResult.Plain(await TranslateAsync(text, settings, token));
+            return new TranslationResult(content.Trim());
+        throw new FormatException("模型返回的译文格式不正确，请调整翻译与例句提示词。");
     }
 
     public Task<string> TestAsync(TranslationSettings settings, CancellationToken token)

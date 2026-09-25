@@ -41,7 +41,7 @@ public partial class SettingsWindow : Window
         SystemBox.Text = value.SystemPrompt;
         MultiBox.Text = value.MultiParagraphPrompt;
         SingleBox.Text = value.SingleParagraphPrompt;
-        DictionaryBox.Text = value.DictionaryPrompt;
+        ExampleBox.Text = value.ExamplePrompt;
     }
 
     private TranslationSettings Read()
@@ -57,7 +57,7 @@ public partial class SettingsWindow : Window
             Temperature = temperature, RequestsPerSecond = rate, MaxTextLength = length,
             MaxParagraphs = paragraphs, SystemPrompt = SystemBox.Text,
             MultiParagraphPrompt = MultiBox.Text, SingleParagraphPrompt = SingleBox.Text,
-            DictionaryPrompt = DictionaryBox.Text
+            ExamplePrompt = ExampleBox.Text
         };
         settings.Validate();
         return settings;

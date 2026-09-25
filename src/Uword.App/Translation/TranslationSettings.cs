@@ -28,13 +28,11 @@ public sealed record TranslationSettings
         """;
     public string MultiParagraphPrompt { get; set; } = "Translate to {{to}}:\n\n{{text}}";
     public string SingleParagraphPrompt { get; set; } = "Translate to {{to}} (output translation only):\n\n{{text}}";
-    public string DictionaryPrompt { get; set; } = """
-        Explain the selected word or short phrase "{{text}}" in {{to}}.
-        Return ONLY one JSON object with keys: headword (string), phonetic (IPA string or null if uncertain),
-        translation (short string), senses (array of objects with partOfSpeech, meanings as a string array,
-        examples as an array of objects with source and translation strings), note (short string or null).
-        Group distinct meanings by part of speech, include at most 3 senses and 2 short bilingual examples per sense.
-        Examples you create are illustrative, not quotations. Do not invent a phonetic spelling if unsure.
+    public string ExamplePrompt { get; set; } = """
+        Translate {{text}} into {{to}}. Return only a compact JSON object:
+        {"translation":"translated text","exampleSource":"one natural short sentence in the source language using the selected expression","exampleTranslation":"that sentence translated into {{to}}"}
+        For a full sentence, create a different short sentence illustrating its key expression.
+        Do not repeat the translation in the example or add notes, definitions, or parts of speech.
         """;
 
     [JsonIgnore]
@@ -67,7 +65,7 @@ public sealed record TranslationSettings
             throw new ArgumentException("{{text}} 仅可用于单段和多段提示词。");
         ValidatePrompt(MultiParagraphPrompt, true);
         ValidatePrompt(SingleParagraphPrompt, true);
-        ValidatePrompt(DictionaryPrompt, true);
+        ValidatePrompt(ExamplePrompt, true);
     }
 
     private static void ValidatePrompt(string prompt, bool requireText)

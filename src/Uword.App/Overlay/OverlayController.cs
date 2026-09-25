@@ -21,7 +21,6 @@ public sealed class OverlayController : IDisposable
     public event Action? HoverLeft;
     public event Action? MarkerClicked;
     public event Action? PreviewDismissed;
-    public event Action<TranslationMode>? ModeChanged;
     public event Action? SpeakRequested;
 
     public OverlayController()
@@ -31,7 +30,6 @@ public sealed class OverlayController : IDisposable
         _circle.MouseLeave += (_, _) => HoverLeft?.Invoke();
         _circle.Clicked += () => MarkerClicked?.Invoke();
         _preview.Dismissed += () => PreviewDismissed?.Invoke();
-        _preview.ModeChanged += mode => ModeChanged?.Invoke(mode);
         _preview.SpeakRequested += () => SpeakRequested?.Invoke();
     }
 
@@ -53,7 +51,7 @@ public sealed class OverlayController : IDisposable
         Place(_circle, _anchor);
     }
 
-    public void ShowPreview(SelectionSnapshot snapshot, bool dictionaryEligible, TranslationMode mode)
+    public void ShowPreview(SelectionSnapshot snapshot)
     {
         nint marker = new WindowInteropHelper(_circle).Handle;
         if (NativeMethods.GetWindowRect(marker, out var rect))
@@ -65,15 +63,13 @@ public sealed class OverlayController : IDisposable
         string source;
         try { source = Process.GetProcessById(snapshot.ProcessId).ProcessName; }
         catch (Exception) { source = $"Process {snapshot.ProcessId}"; }
-        _preview.SetContent(snapshot.Text, $"{source} | {snapshot.Text.Length} characters", dictionaryEligible, mode);
+        _preview.SetContent(snapshot.Text, source);
         _preview.Show();
         Place(_preview, new ScreenPoint(_anchor.X + 32, _anchor.Y));
     }
 
     public void SetResult(TranslationResult result) => _preview.SetResult(result);
     public void SetError(string message) => _preview.SetError(message);
-    public void SetMode(TranslationMode mode) => _preview.SetMode(mode);
-    public void SetLoading() => _preview.SetLoading();
     public void SetVoiceStatus(string message) => _preview.SetVoiceStatus(message);
 
     public bool Contains(ScreenPoint point) => Contains(_circle, point) || Contains(_preview, point) ||

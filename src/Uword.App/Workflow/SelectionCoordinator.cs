@@ -32,7 +32,6 @@ public sealed class SelectionCoordinator : IDisposable
     private int _sourceChangeTicks;
     private int _requestVersion;
     private bool _triggered;
-    private TranslationMode _mode;
     private bool _enabled = true;
 
     public SelectionCoordinator(Dispatcher dispatcher, MouseMonitor mouse, SelectionClient reader,
@@ -55,7 +54,6 @@ public sealed class SelectionCoordinator : IDisposable
         _overlay.HoverEntered += OnHoverEntered;
         _overlay.HoverLeft += OnHoverLeft;
         _overlay.MarkerClicked += OnMarkerClicked;
-        _overlay.ModeChanged += OnModeChanged;
         _overlay.SpeakRequested += OnSpeakRequested;
         _overlay.PreviewDismissed += Reset;
         _hoverTimer.Tick += OnHoverElapsed;
@@ -177,34 +175,19 @@ public sealed class SelectionCoordinator : IDisposable
         if (_current is null || _triggered) return;
         _triggered = true;
         _hoverTimer.Stop();
-        bool dictionaryEligible = WordCandidate.IsLikelyWord(_current.Text) &&
-            _current.Text.Trim().Length <= _settings.MaxTextLength;
-        _mode = dictionaryEligible ? TranslationMode.Dictionary : TranslationMode.Translation;
         var elapsed = Stopwatch.StartNew();
-        _overlay.ShowPreview(_current, dictionaryEligible, _mode);
+        _overlay.ShowPreview(_current);
         _log.WriteEvent($"preview_shown trigger={source} elapsed_ms={elapsed.ElapsedMilliseconds}");
-        _ = TranslateModeAsync(_mode);
-    }
-
-    private void OnModeChanged(TranslationMode mode)
-    {
-        if (!_triggered || _current is null || mode == _mode ||
-            (mode == TranslationMode.Dictionary && (!WordCandidate.IsLikelyWord(_current.Text) ||
-                _current.Text.Trim().Length > _settings.MaxTextLength))) return;
-        _mode = mode;
-        _overlay.SetMode(mode);
-        _overlay.SetLoading();
-        _audio.Stop();
-        _ = TranslateModeAsync(mode);
+        _ = TranslateAsync();
     }
 
     private void OnSpeakRequested()
     {
-        if (!_triggered || _mode != TranslationMode.Dictionary || _current is null) return;
+        if (!_triggered || _current is null) return;
         _overlay.SetVoiceStatus(_audio.TrySpeak(_current.Text.Trim(), out string error) ? "" : error);
     }
 
-    private async Task TranslateModeAsync(TranslationMode mode)
+    private async Task TranslateAsync()
     {
         if (_current is null) return;
         int generation = _generation;
@@ -224,7 +207,7 @@ public sealed class SelectionCoordinator : IDisposable
         _diagnostics.SetStatus("正在请求翻译...");
         try
         {
-            TranslationResult result = await _translator.TranslateRichAsync(snapshot.Text, mode, _settings, request.Token);
+            TranslationResult result = await _translator.TranslateResultAsync(snapshot.Text, _settings, request.Token);
             if (generation != _generation || version != _requestVersion) return;
             _overlay.SetResult(result);
             _log.WriteEvent("translation_completed");
@@ -297,7 +280,6 @@ public sealed class SelectionCoordinator : IDisposable
         _overlay.HoverEntered -= OnHoverEntered;
         _overlay.HoverLeft -= OnHoverLeft;
         _overlay.MarkerClicked -= OnMarkerClicked;
-        _overlay.ModeChanged -= OnModeChanged;
         _overlay.SpeakRequested -= OnSpeakRequested;
         _overlay.PreviewDismissed -= Reset;
         _hoverTimer.Tick -= OnHoverElapsed;

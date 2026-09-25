@@ -43,10 +43,10 @@
                                                 AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" />
                 <TextBlock Text="单段提示词" /><TextBox x:Name="SingleBox" Margin="0,5,0,6" Padding="8" Height="85"
                                                 AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" />
-                <TextBlock Text="单词释义提示词" Margin="0,12,0,0" />
-                <TextBox x:Name="DictionaryBox" Margin="0,5,0,6" Padding="8" Height="132"
+                <TextBlock Text="翻译与例句提示词（短选区）" Margin="0,12,0,0" />
+                <TextBox x:Name="ExampleBox" Margin="0,5,0,6" Padding="8" Height="132"
                          AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" />
-                <TextBlock Text="可用变量：{{to}}、{{text}}。多段译文须用独立一行的 %% 分隔；单词释义须返回 JSON。"
+                <TextBlock Text="可用变量：{{to}}、{{text}}。多段译文用独立一行的 %% 分隔；短选区返回 translation、exampleSource、exampleTranslation JSON 字段。"
                            Foreground="#52625D" FontSize="12" />
             </StackPanel>
         </ScrollViewer>
